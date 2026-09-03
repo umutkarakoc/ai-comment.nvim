@@ -2,7 +2,7 @@
 
 Edit your code by writing comments.
 
-<img src="demo.gif" alt="ai-comment.nvim demo" width="100%">
+[demo.webm](https://github.com/user-attachments/assets/03d72d08-06cb-46fb-be38-b6c7c0836b2d)
 
 ```
 sum the array with a for loop ai!

@@ -1,0 +1,371 @@
+-- ai-comment: edit files by writing comments
+--   "comment !!": apply an AI edit to the file
+--   "comment ??": ask the AI, answer is inserted as a comment below
+--
+-- Requires: OPENROUTER_API_KEY
+
+local M = {}
+
+M.config = {
+  model = vim.env.AI_COMMENT_MODEL or "deepseek/deepseek-v4-flash-latest",
+  url = vim.env.AI_COMMENT_URL or "https://openrouter.ai/api/v1/chat/completions",
+  -- key priority: OPENAI_API_KEY, then OPENROUTER_API_KEY
+  api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
+  max_tokens = 16384,
+  history_size = 10, -- conversation turns kept per buffer
+}
+
+-- Per-buffer conversation history: { [bufnr] = { { role, content }, ... } }
+local history = {}
+
+-- Returns the history for a buffer (current by default)
+function M.history(bufnr)
+  local h = history[bufnr or vim.api.nvim_get_current_buf()]
+  return h or {}
+end
+
+-- ================= helpers =================
+
+-- Notify. persist=true keeps the message until replaced/dismissed.
+local function notify(msg, level, persist)
+  if persist then
+    vim.notify(msg, level or vim.log.levels.INFO, { timeout = 0, replace = true })
+  else
+    vim.notify(msg, level or vim.log.levels.INFO, { replace = true })
+  end
+end
+
+-- Sign shown in the sign column while a request is in flight
+local SIGN_NAME = "AICommentWorking"
+local current_sign = nil
+vim.fn.sign_define(SIGN_NAME, { text = "⏳", texthl = "DiagnosticInfo" })
+
+local function sign_show()
+  local buf = vim.api.nvim_get_current_buf()
+  local lnum = vim.fn.line(".")
+  current_sign = vim.fn.sign_place(0, "AICommentGroup", SIGN_NAME, buf, { lnum = lnum })
+end
+
+local function sign_hide()
+  local ok = pcall(function()
+    if current_sign then
+      vim.fn.sign_unplace("AICommentGroup", { id = current_sign })
+      current_sign = nil
+    end
+  end)
+  if not ok then
+    current_sign = nil
+  end
+end
+
+local function current_line()
+  return vim.api.nvim_get_current_line()
+end
+
+local function is_ai_marker()
+  return current_line():find("!!%s*$") ~= nil
+end
+
+local function is_question_marker()
+  return current_line():find("%?%?%s*$") ~= nil
+end
+
+local function extract_instruction(marker)
+  local line = current_line()
+  -- strip the comment sigil (// # -- /* * <!-- etc.)
+  local instr = line:gsub("^%s*[/#%*%-%s;%[%]]*", "")
+  instr = instr:gsub("%s*" .. marker .. "%s*$", "")
+  return instr:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function file_content()
+  return table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+end
+
+-- Returns the git diff for the buffer if it lives in a repo and has changes.
+local function git_diff_for(bufnr)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" then return nil end
+  local cwd = vim.fn.getcwd()
+  local ok, res = pcall(vim.system, { "git", "-C", cwd, "diff", "--", path }, { text = true })
+  if not ok then return nil end
+  if res.code ~= 0 then return nil end
+  local diff = res.stdout
+  if diff == "" then return nil end
+  return diff
+end
+
+local function strip_fences(text)
+  if text:match("^%s*```") then
+    text = text:gsub("^%s*```[%w+-]*%s*\n?", "")
+    text = text:gsub("```%s*$", "")
+  end
+  return text
+end
+
+-- ================= request =================
+
+local function build_payload(instruction, code, filetype, diff, mode)
+  mode = mode or "edit"
+  local system
+  if mode == "ask" then
+    system =
+      "You are an expert programmer. The user asks a question as a comment ending with '??'. "
+      .. "Answer the question concisely and accurately. "
+      .. "If the question is about the provided file, reference it. "
+      .. "Reply with ONLY the answer text, no markdown fences, no preamble. "
+      .. "Short answers preferred (under 10 lines unless asked for detail)."
+  else
+    system =
+      "You are an expert code editor working interactively on one file. "
+      .. "The user gives an instruction as a comment ending with '!!'. "
+      .. "You already had previous edit conversations on this file (given in history). "
+      .. "Apply the new instruction by editing the file. "
+      .. "Reply with ONLY the complete edited file content, no explanations, no markdown fences. "
+      .. "Remove the '!!' instruction comment line itself after applying the edit. "
+      .. "Preserve everything else exactly as-is (whitespace, comments, formatting)."
+  end
+
+  local history_msgs = {}
+  for _, m in ipairs(M.history()) do
+    table.insert(history_msgs, { role = m.role, content = m.content })
+  end
+
+  -- Send the diff when available, otherwise the full file.
+  local context
+  if diff then
+    context = ("File type: %s\n\n(History of previous edits follows.)\n\nCurrent uncommitted changes (git diff):\n```diff\n%s\n```\n\nFull file for reference (only if you need to see unchanged code):\n```\n%s\n```")
+      :format(filetype, diff, code)
+  else
+    context = ("File type: %s\n\n(History of previous edits on this file follows.)\n\nInstruction: %s\n\nCurrent file:\n```\n%s\n```")
+      :format(filetype, instruction, code)
+  end
+
+  local user = ("%s: %s\n\n%s"):format(mode == "ask" and "Question" or "Instruction", instruction, context)
+
+  -- OpenRouter: fastest provider wins. Skipped for other providers.
+  local payload_extra = {}
+  if M.config.url:find("openrouter") then
+    payload_extra.provider = { sort = "latency" }
+  end
+  payload_extra.model = M.config.model
+  payload_extra.messages = vim.list_extend({ { role = "system", content = system } }, vim.list_extend(history_msgs, {
+    { role = "user", content = user },
+  }))
+  payload_extra.temperature = 0.1
+  payload_extra.max_tokens = M.config.max_tokens
+
+  return vim.json.encode(payload_extra)
+end
+
+local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
+  if not M.config.api_key then
+    vim.notify("OPENAI_API_KEY or OPENROUTER_API_KEY not set", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Temporarily switch to the target buffer so history() reads the right one
+  local old_buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_set_current_buf(bufnr)
+  local ok_payload, payload = pcall(build_payload, instruction, code, filetype, diff, mode)
+  vim.api.nvim_set_current_buf(old_buf)
+  if not ok_payload then
+    cb(nil, "failed to build payload: " .. tostring(payload))
+    return
+  end
+
+  local tmp = vim.fn.tempname()
+  local f = assert(io.open(tmp, "w"))
+  f:write(payload)
+  f:close()
+
+  local cmd = {
+    "curl", "-s", "--max-time", "120", "-X", "POST", M.config.url,
+    "-H", "Content-Type: application/json",
+    "-H", "Authorization: Bearer " .. M.config.api_key,
+    "--data-binary", "@" .. tmp,
+  }
+  vim.system(cmd, { text = true }, function(res)
+    os.remove(tmp)
+    if res.code ~= 0 then
+      cb(nil, "curl error: " .. (res.stderr or "exit " .. tostring(res.code)))
+      return
+    end
+    local ok, data = pcall(vim.json.decode, res.stdout)
+    if not ok then
+      cb(nil, "JSON parse error: " .. res.stdout:sub(1, 300))
+      return
+    end
+    if data.error then
+      cb(nil, "API error: " .. (data.error.message or data.error))
+      return
+    end
+    local content = data.choices and data.choices[1] and data.choices[1].message.content
+    if not content then
+      cb(nil, "empty response")
+      return
+    end
+
+    -- Abort if the model ran out of tokens; the file would be truncated.
+    local finish = data.choices[1].finish_reason
+    if finish == "length" then
+      cb(nil, "response truncated (max_tokens reached). File NOT modified. Split the request into smaller steps or raise max_tokens.")
+      return
+    end
+    cb(content)
+  end)
+end
+
+-- ================= apply =================
+
+local function apply_edit(new_content)
+  local new_lines = vim.split(strip_fences(new_content), "\n", { plain = true })
+  -- drop a single trailing empty line (file-ending newline)
+  if #new_lines > 1 and new_lines[#new_lines] == "" then
+    table.remove(new_lines)
+  end
+
+  local old_count = vim.api.nvim_buf_line_count(0)
+  local new_count = #new_lines
+  if new_count < old_count * 0.5 then
+    vim.notify(
+      string.format("Suspiciously short response (%d -> %d lines). Not applied.", old_count, new_count),
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, new_lines)
+  notify(
+    string.format("!! applied: %d -> %d lines (undo with u)", old_count, new_count),
+    vim.log.levels.INFO
+  )
+end
+
+-- Comment sigil per filetype for the answer lines
+local function comment_prefix(ft)
+  if ft == "lua" then return "--"
+  elseif ft == "python" then return "#"
+  elseif ft == "sh" or ft == "bash" or ft == "fish" or ft == "yaml" or ft == "toml" then return "#"
+  elseif ft == "sql" then return "--"
+  elseif ft == "haskell" then return "--"
+  elseif ft == "elixir" then return "#"
+  elseif ft == "ruby" then return "#"
+  elseif ft == "vim" then return "\""
+  elseif ft == "html" or ft == "xml" or ft == "vue" then return "<!--"
+  else return "//" end -- c, cpp, rust, go, js, ts, java
+end
+
+-- Insert the AI answer as comment lines right below the "??" line
+local function apply_answer(answer, bufnr)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local prefix = comment_prefix(vim.bo[bufnr].filetype or "")
+
+  local ans_lines = vim.split(strip_fences(answer), "\n", { plain = true })
+  if #ans_lines > 1 and ans_lines[#ans_lines] == "" then
+    table.remove(ans_lines)
+  end
+  local comment_lines = {}
+  for _, l in ipairs(ans_lines) do
+    if l ~= "" then
+      table.insert(comment_lines, prefix .. " " .. l)
+    end
+  end
+
+  -- find the line ending with "??" (? is a Lua magic char, escape it)
+  local insert_at = -1
+  for i, l in ipairs(lines) do
+    if l:find("%?%?%s*$") then
+      insert_at = i
+      break
+    end
+  end
+  if insert_at < 0 then
+    insert_at = vim.api.nvim_win_get_cursor(0)[1]
+  end
+
+  vim.api.nvim_buf_set_lines(bufnr, insert_at, insert_at, false, comment_lines)
+  notify("?? answer added (" .. #comment_lines .. " lines)", vim.log.levels.INFO)
+end
+
+-- ================= run =================
+
+function M.run()
+  local mode = is_question_marker() and "ask" or (is_ai_marker() and "edit" or nil)
+  if not mode then
+    vim.notify("Line must end with '!!' (edit) or '??' (question)", vim.log.levels.WARN)
+    return
+  end
+  local marker = mode == "ask" and "??" or "!!"
+  local instruction = extract_instruction(marker)
+  if instruction == "" then
+    vim.notify("Empty instruction", vim.log.levels.WARN)
+    return
+  end
+  local code = file_content()
+  if #code > 200000 then
+    vim.notify("File too large (200KB+), not supported", vim.log.levels.ERROR)
+    return
+  end
+
+  local ft = vim.bo.filetype ~= "" and vim.bo.filetype or vim.fn.expand("%:e")
+  notify(marker .. " working: " .. instruction, vim.log.levels.INFO, true)
+  sign_show()
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local diff = git_diff_for(bufnr)
+  if diff then
+    notify(marker .. " diff context found (" .. #diff .. " bytes)", vim.log.levels.INFO, true)
+  end
+
+  local history_msgs = M.history(bufnr)
+  request_edit(instruction, code, ft, bufnr, diff, mode, function(content, err)
+    if err then
+      vim.schedule(function()
+        sign_hide()
+        notify(marker .. " error: " .. err, vim.log.levels.ERROR)
+      end)
+      return
+    end
+    vim.schedule(function()
+      sign_hide()
+      if mode == "ask" then
+        apply_answer(content, bufnr)
+      else
+        apply_edit(content)
+      end
+
+      table.insert(history_msgs, { role = "user", content = instruction })
+      table.insert(history_msgs, { role = "assistant", content = content })
+      local max = M.config.history_size
+      if #history_msgs > max * 2 then
+        for _ = 1, #history_msgs - max * 2 do
+          table.remove(history_msgs, 1)
+        end
+      end
+      history[bufnr] = history_msgs
+    end)
+  end)
+end
+
+-- ================= setup =================
+
+function M.setup(opts)
+  M.config = vim.tbl_extend("force", M.config, opts or {})
+
+  vim.api.nvim_create_user_command("AIComment", M.run, { desc = "Apply !! (edit) / ?? (question)" })
+
+  -- auto-trigger when the user leaves insert mode on a marker line
+  vim.api.nvim_create_autocmd("InsertLeave", {
+    group = vim.api.nvim_create_augroup("ai_comment", { clear = true }),
+    callback = function()
+      if is_ai_marker() or is_question_marker() then
+        vim.schedule(function()
+          M.run()
+        end)
+      end
+    end,
+  })
+end
+
+return M

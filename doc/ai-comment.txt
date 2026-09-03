@@ -1,0 +1,85 @@
+*ai-comment.nvim*   Edit code by writing comments
+
+==============================================================================
+INTRODUCTION                                                    *ai-comment*
+
+ai-comment.nvim lets you edit code by writing comments. A comment ending with
+`!!` applies an AI edit to the file. A comment ending with `??` asks the AI a
+question, and the answer is inserted below as comment lines.
+
+Requires the `OPENAI_API_KEY` or `OPENROUTER_API_KEY` environment variable
+and Neovim 0.11+. Works with any OpenAI-compatible endpoint.
+
+==============================================================================
+INSTALLATION                                                  *ai-comment-install*
+
+lazy.nvim >
+    { "umutkarakoc/ai-comment.nvim",
+      config = function()
+        require("ai-comment").setup({})
+      end,
+    }
+<
+
+vim.pack.add >
+    vim.pack.add({ "git@github.com:umutkarakoc/ai-comment.nvim.git" })
+<
+
+==============================================================================
+USAGE                                                          *ai-comment-usage*
+
+`!!` (edit)~
+
+Write a comment ending with `!!` and press Esc (or run |:AIComment|). The AI
+edits the file and removes the comment.
+
+>rust
+    // sum the array with a for loop !!
+<
+
+`??` (question)~
+
+End a comment with `??` and the AI inserts its answer as comment lines right
+below it.
+
+>rust
+    // what does this line do? ??
+<
+
+The question line is kept.
+
+==============================================================================
+OPTIONS                                                  *ai-comment-options*
+
+model             Any OpenAI-compatible model id.
+                  (default: deepseek/deepseek-v4-flash-latest)
+url               Any OpenAI-compatible endpoint.
+                  (default: https://openrouter.ai/api/v1/chat/completions)
+api_key           API key. Read from OPENAI_API_KEY, then OPENROUTER_API_KEY.
+max_tokens        Output token limit. (default: 16384)
+history_size      Conversation turns remembered per buffer. (default: 10)
+
+`AI_COMMENT_MODEL` and `AI_COMMENT_URL` environment variables override the
+model and endpoint.
+
+==============================================================================
+COMMANDS                                                *ai-comment-commands*
+
+:AIComment        Run the `!!`/`??` marker on the current line.
+
+==============================================================================
+BEHAVIOUR                                              *ai-comment-behaviour*
+
+Each buffer has its own conversation history, capped at |ai-comment-options|
+history_size turns.
+
+If the file is in a git repo with uncommitted changes, the diff is sent
+instead of the whole file.
+
+`provider.sort = "latency"` is sent to OpenRouter so the fastest provider is
+selected.
+
+Truncated responses (finish_reason == "length") are rejected, as are
+responses shorter than half the file. All edits are undoable with `u`.
+
+ vim:tw=78:ts=8:noet:ft=help:norl:

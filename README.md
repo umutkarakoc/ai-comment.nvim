@@ -2,6 +2,8 @@
 
 Edit your code by writing comments.
 
+<video src="demo.webm" controls muted loop style="max-width: 100%;"></video>
+
 ```
 sum the array with a for loop ai!
 ```

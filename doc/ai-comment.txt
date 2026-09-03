@@ -52,7 +52,7 @@ The question line is kept.
 OPTIONS                                                  *ai-comment-options*
 
 model             Any OpenAI-compatible model id.
-                  (default: deepseek/deepseek-v4-flash-latest)
+                  (default: deepseek/deepseek-v4-flash)
 url               Any OpenAI-compatible endpoint.
                   (default: https://openrouter.ai/api/v1/chat/completions)
 api_key           API key. Read from OPENAI_API_KEY, then OPENROUTER_API_KEY.

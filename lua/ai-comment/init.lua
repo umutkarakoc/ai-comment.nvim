@@ -7,7 +7,7 @@
 local M = {}
 
 M.config = {
-  model = vim.env.AI_COMMENT_MODEL or "deepseek/deepseek-v4-flash-latest",
+  model = vim.env.AI_COMMENT_MODEL or "deepseek/deepseek-v4-flash",
   url = vim.env.AI_COMMENT_URL or "https://openrouter.ai/api/v1/chat/completions",
   -- key priority: OPENAI_API_KEY, then OPENROUTER_API_KEY
   api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
@@ -330,7 +330,8 @@ function M.run()
     if err then
       vim.schedule(function()
         sign_hide()
-        notify(marker .. " error: " .. err, vim.log.levels.ERROR)
+        -- persistent error so it can't be missed
+        notify(marker .. " error: " .. err, vim.log.levels.ERROR, true)
       end)
       return
     end

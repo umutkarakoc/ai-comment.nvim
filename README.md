@@ -83,7 +83,7 @@ All values listed with their defaults. You rarely need to change any of them.
 
 ```lua
 require("ai-comment").setup({
-  model = "deepseek/deepseek-v4-flash-latest", -- any OpenAI-compatible model id
+  model = "deepseek/deepseek-v4-flash", -- any OpenAI-compatible model id
   url = "https://openrouter.ai/api/v1/chat/completions", -- any OpenAI-compatible endpoint
   api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
   max_tokens = 16384, -- output limit

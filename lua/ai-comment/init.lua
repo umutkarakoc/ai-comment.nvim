@@ -1,6 +1,6 @@
 -- ai-comment: edit files by writing comments
---   "comment !!": apply an AI edit to the file
---   "comment ??": ask the AI, answer is inserted as a comment below
+--   "comment ai!": apply an AI edit to the file
+--   "comment ai?": ask the AI, answer is inserted as a comment below
 --
 -- Requires: OPENROUTER_API_KEY
 
@@ -12,6 +12,9 @@ M.config = {
   -- key priority: OPENAI_API_KEY, then OPENROUTER_API_KEY
   api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
   max_tokens = 16384,
+  -- markers; customize if ai!/ai? clash with your language
+  edit_marker = "ai!", -- apply an AI edit
+  ask_marker = "ai?", -- ask the AI, answer inserted below
   history_size = 10, -- conversation turns kept per buffer
 }
 
@@ -62,19 +65,20 @@ local function current_line()
   return vim.api.nvim_get_current_line()
 end
 
-local function is_ai_marker()
-  return current_line():find("!!%s*$") ~= nil
+-- Escape Lua pattern magic chars so markers like '?' work literally
+local function escape_pattern(s)
+  return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
 end
 
-local function is_question_marker()
-  return current_line():find("%?%?%s*$") ~= nil
+local function is_marker(marker)
+  return current_line():find(escape_pattern(marker) .. "%s*$") ~= nil
 end
 
 local function extract_instruction(marker)
   local line = current_line()
   -- strip the comment sigil (// # -- /* * <!-- etc.)
   local instr = line:gsub("^%s*[/#%*%-%s;%[%]]*", "")
-  instr = instr:gsub("%s*" .. marker .. "%s*$", "")
+  instr = instr:gsub("%s*" .. escape_pattern(marker) .. "%s*$", "")
   return instr:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
@@ -110,7 +114,7 @@ local function build_payload(instruction, code, filetype, diff, mode)
   local system
   if mode == "ask" then
     system =
-      "You are an expert programmer. The user asks a question as a comment ending with '??'. "
+      "You are an expert programmer. The user asks a question as a comment. "
       .. "Answer the question concisely and accurately. "
       .. "If the question is about the provided file, reference it. "
       .. "Reply with ONLY the answer text, no markdown fences, no preamble. "
@@ -118,11 +122,11 @@ local function build_payload(instruction, code, filetype, diff, mode)
   else
     system =
       "You are an expert code editor working interactively on one file. "
-      .. "The user gives an instruction as a comment ending with '!!'. "
+      .. "The user gives an instruction as a comment. "
       .. "You already had previous edit conversations on this file (given in history). "
       .. "Apply the new instruction by editing the file. "
       .. "Reply with ONLY the complete edited file content, no explanations, no markdown fences. "
-      .. "Remove the '!!' instruction comment line itself after applying the edit. "
+      .. "Remove the instruction comment line itself after applying the edit. "
       .. "Preserve everything else exactly as-is (whitespace, comments, formatting)."
   end
 
@@ -237,7 +241,7 @@ local function apply_edit(new_content)
 
   vim.api.nvim_buf_set_lines(0, 0, -1, false, new_lines)
   notify(
-    string.format("!! applied: %d -> %d lines (undo with u)", old_count, new_count),
+    string.format("%s applied: %d -> %d lines (undo with u)", M.config.edit_marker, old_count, new_count),
     vim.log.levels.INFO
   )
 end
@@ -256,7 +260,7 @@ local function comment_prefix(ft)
   else return "//" end -- c, cpp, rust, go, js, ts, java
 end
 
--- Insert the AI answer as comment lines right below the "??" line
+-- Insert the AI answer as comment lines right below the ask-marker line
 local function apply_answer(answer, bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local prefix = comment_prefix(vim.bo[bufnr].filetype or "")
@@ -272,10 +276,10 @@ local function apply_answer(answer, bufnr)
     end
   end
 
-  -- find the line ending with "??" (? is a Lua magic char, escape it)
+  -- find the line ending with the ask marker
   local insert_at = -1
   for i, l in ipairs(lines) do
-    if l:find("%?%?%s*$") then
+    if l:find(escape_pattern(M.config.ask_marker) .. "%s*$") then
       insert_at = i
       break
     end
@@ -285,18 +289,21 @@ local function apply_answer(answer, bufnr)
   end
 
   vim.api.nvim_buf_set_lines(bufnr, insert_at, insert_at, false, comment_lines)
-  notify("?? answer added (" .. #comment_lines .. " lines)", vim.log.levels.INFO)
+  notify(M.config.ask_marker .. " answer added (" .. #comment_lines .. " lines)", vim.log.levels.INFO)
 end
 
 -- ================= run =================
 
 function M.run()
-  local mode = is_question_marker() and "ask" or (is_ai_marker() and "edit" or nil)
+  local mode = is_marker(M.config.ask_marker) and "ask" or (is_marker(M.config.edit_marker) and "edit" or nil)
   if not mode then
-    vim.notify("Line must end with '!!' (edit) or '??' (question)", vim.log.levels.WARN)
+    vim.notify(
+      string.format("Line must end with '%s' (edit) or '%s' (question)", M.config.edit_marker, M.config.ask_marker),
+      vim.log.levels.WARN
+    )
     return
   end
-  local marker = mode == "ask" and "??" or "!!"
+  local marker = mode == "ask" and M.config.ask_marker or M.config.edit_marker
   local instruction = extract_instruction(marker)
   if instruction == "" then
     vim.notify("Empty instruction", vim.log.levels.WARN)
@@ -353,13 +360,13 @@ end
 function M.setup(opts)
   M.config = vim.tbl_extend("force", M.config, opts or {})
 
-  vim.api.nvim_create_user_command("AIComment", M.run, { desc = "Apply !! (edit) / ?? (question)" })
+  vim.api.nvim_create_user_command("AIComment", M.run, { desc = "Apply edit/ask marker on current line" })
 
   -- auto-trigger when the user leaves insert mode on a marker line
   vim.api.nvim_create_autocmd("InsertLeave", {
     group = vim.api.nvim_create_augroup("ai_comment", { clear = true }),
     callback = function()
-      if is_ai_marker() or is_question_marker() then
+      if is_marker(M.config.edit_marker) or is_marker(M.config.ask_marker) then
         vim.schedule(function()
           M.run()
         end)

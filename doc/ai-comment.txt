@@ -4,7 +4,7 @@
 INTRODUCTION                                                    *ai-comment*
 
 ai-comment.nvim lets you edit code by writing comments. A comment ending with
-`!!` applies an AI edit to the file. A comment ending with `??` asks the AI a
+`ai!` applies an AI edit to the file. A comment ending with `ai?` asks the AI a
 question, and the answer is inserted below as comment lines.
 
 Requires the `OPENAI_API_KEY` or `OPENROUTER_API_KEY` environment variable
@@ -28,22 +28,22 @@ vim.pack.add >
 ==============================================================================
 USAGE                                                          *ai-comment-usage*
 
-`!!` (edit)~
+`ai!` (edit)~
 
-Write a comment ending with `!!` and press Esc (or run |:AIComment|). The AI
+Write a comment ending with `ai!` and press Esc (or run |:AIComment|). The AI
 edits the file and removes the comment.
 
 >rust
-    // sum the array with a for loop !!
+    // sum the array with a for loop ai!
 <
 
-`??` (question)~
+`ai?` (question)~
 
-End a comment with `??` and the AI inserts its answer as comment lines right
+End a comment with `ai?` and the AI inserts its answer as comment lines right
 below it.
 
 >rust
-    // what does this line do? ??
+    // what does this line do? ai?
 <
 
 The question line is kept.
@@ -58,6 +58,11 @@ url               Any OpenAI-compatible endpoint.
 api_key           API key. Read from OPENAI_API_KEY, then OPENROUTER_API_KEY.
 max_tokens        Output token limit. (default: 16384)
 history_size      Conversation turns remembered per buffer. (default: 10)
+edit_marker       Comment ending that triggers an AI edit. (default: ai!)
+ask_marker        Comment ending that asks the AI. (default: ai?)
+
+Set `edit_marker`/`ask_marker` to customize the triggers, e.g. the classic
+`!!`/`??`, or anything that avoids clashing with your language's syntax.
 
 `AI_COMMENT_MODEL` and `AI_COMMENT_URL` environment variables override the
 model and endpoint.
@@ -65,7 +70,7 @@ model and endpoint.
 ==============================================================================
 COMMANDS                                                *ai-comment-commands*
 
-:AIComment        Run the `!!`/`??` marker on the current line.
+:AIComment        Run the `ai!`/`ai?` marker on the current line.
 
 ==============================================================================
 BEHAVIOUR                                              *ai-comment-behaviour*

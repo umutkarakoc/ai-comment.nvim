@@ -3,7 +3,7 @@
 Edit your code by writing comments.
 
 ```
-sum the array with a for loop !!
+sum the array with a for loop ai!
 ```
 
 Press Esc. Done.
@@ -12,8 +12,8 @@ Press Esc. Done.
 
 Two markers, two behaviours:
 
-- A comment ending with `!!` tells the AI to edit the file.
-- A comment ending with `??` asks a question, and the answer is inserted right below as a comment.
+- A comment ending with `ai!` tells the AI to edit the file.
+- A comment ending with `ai?` asks a question, and the answer is inserted right below as a comment.
 
 It uses whatever model you pick on any OpenAI-compatible endpoint. There's no
 wrapper around a specific vendor SDK — it just calls the chat completions API
@@ -30,7 +30,7 @@ Edit mode:
 ```rust
 fn main() {
     let mut total = 0;
-    // sum every number in 1..=10 !!
+    // sum every number in 1..=10 ai!
     println!("{total}");
 }
 ```
@@ -50,19 +50,19 @@ fn main() {
 Question mode:
 
 ```rust
-// what does this line do? ??
+// what does this line do? ai?
 let n: usize = items.iter().filter(|x| x > 3).count();
 ```
 
 The answer lands as comments below the question:
 
 ```rust
-// what does this line do? ??
+// what does this line do? ai?
 // Counts the elements in `items` that are greater than 3.
 let n: usize = items.iter().filter(|x| x > 3).count();
 ```
 
-The question line stays. The `!!` line does not — it's removed as part of the edit.
+The question line stays. The `ai!` line does not — it's removed as part of the edit.
 
 ## Installation
 
@@ -88,6 +88,8 @@ require("ai-comment").setup({
   api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
   max_tokens = 16384, -- output limit
   history_size = 10,  -- conversation turns remembered per buffer
+  edit_marker = "ai!", -- comment ending triggers an AI edit
+  ask_marker = "ai?",  -- comment ending asks the AI
 })
 ```
 

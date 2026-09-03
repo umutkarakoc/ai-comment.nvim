@@ -322,7 +322,7 @@ function M.run()
 
   local diff = git_diff_for(bufnr)
   if diff then
-    notify(marker .. " diff context found (" .. #diff .. " bytes)", vim.log.levels.INFO, true)
+    notify(marker .. " diff context found (" .. #diff .. " bytes)", vim.log.levels.INFO)
   end
 
   local history_msgs = M.history(bufnr)
@@ -330,8 +330,7 @@ function M.run()
     if err then
       vim.schedule(function()
         sign_hide()
-        -- persistent error so it can't be missed
-        notify(marker .. " error: " .. err, vim.log.levels.ERROR, true)
+        notify(marker .. " error: " .. err, vim.log.levels.ERROR)
       end)
       return
     end

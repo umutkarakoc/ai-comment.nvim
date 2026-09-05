@@ -18,6 +18,7 @@ M.config = {
   history_size = 10, -- conversation turns kept per buffer
   read_tool = true, -- let the AI read files inside the project dir (cwd)
   read_tool_max_bytes = 100000, -- per-file size limit for read_tool
+  max_tool_rounds = 20, -- max tool-call rounds per request
 }
 
 -- Per-buffer conversation history: { [bufnr] = { { role, content }, ... } }
@@ -328,7 +329,7 @@ local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
       end
       if msg and msg.tool_calls and #msg.tool_calls > 0 and M.config.read_tool then
         rounds = rounds + 1
-        if rounds >= 4 then
+        if rounds >= M.config.max_tool_rounds then
           cb(nil, "too many tool rounds, giving up")
           return
         end

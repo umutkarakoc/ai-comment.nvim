@@ -16,6 +16,8 @@ M.config = {
   edit_marker = "ai!", -- apply an AI edit
   ask_marker = "ai?", -- ask the AI, answer inserted below
   history_size = 10, -- conversation turns kept per buffer
+  read_tool = true, -- let the AI read files inside the project dir (cwd)
+  read_tool_max_bytes = 100000, -- per-file size limit for read_tool
 }
 
 -- Per-buffer conversation history: { [bufnr] = { { role, content }, ... } }
@@ -109,78 +111,87 @@ end
 
 -- ================= request =================
 
-local function build_payload(instruction, code, filetype, diff, mode)
-  mode = mode or "edit"
-  local system
-  if mode == "ask" then
-    system =
-      "You are an expert programmer. The user asks a question as a comment. "
-      .. "Answer the question concisely and accurately. "
-      .. "If the question is about the provided file, reference it. "
-      .. "Reply with ONLY the answer text, no markdown fences, no preamble. "
-      .. "Short answers preferred (under 10 lines unless asked for detail)."
-  else
-    system =
-      "You are an expert code editor working interactively on one file. "
-      .. "The user gives an instruction as a comment. "
-      .. "You already had previous edit conversations on this file (given in history). "
-      .. "Apply the new instruction by editing the file. "
-      .. "Reply with ONLY the complete edited file content, no explanations, no markdown fences. "
-      .. "Remove the instruction comment line itself after applying the edit. "
-      .. "Preserve everything else exactly as-is (whitespace, comments, formatting)."
+-- Project-relative path of the buffer (nil if unnamed). Falls back to the
+-- absolute path when the file lives outside the current dir.
+local function buffer_relpath(bufnr)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" then return nil end
+  local cwd_real = vim.fn.resolve(vim.fn.getcwd())
+  local real = vim.fn.resolve(path)
+  local prefix = cwd_real == "/" and "/" or cwd_real .. "/"
+  if real:sub(1, #prefix) == prefix then
+    return real:sub(#prefix + 1)
   end
-
-  local history_msgs = {}
-  for _, m in ipairs(M.history()) do
-    table.insert(history_msgs, { role = m.role, content = m.content })
-  end
-
-  -- Send the diff when available, otherwise the full file.
-  local context
-  if diff then
-    context = ("File type: %s\n\n(History of previous edits follows.)\n\nCurrent uncommitted changes (git diff):\n```diff\n%s\n```\n\nFull file for reference (only if you need to see unchanged code):\n```\n%s\n```")
-      :format(filetype, diff, code)
-  else
-    context = ("File type: %s\n\n(History of previous edits on this file follows.)\n\nInstruction: %s\n\nCurrent file:\n```\n%s\n```")
-      :format(filetype, instruction, code)
-  end
-
-  local user = ("%s: %s\n\n%s"):format(mode == "ask" and "Question" or "Instruction", instruction, context)
-
-  -- OpenRouter: fastest provider wins. Skipped for other providers.
-  local payload_extra = {}
-  if M.config.url:find("openrouter") then
-    payload_extra.provider = { sort = "latency" }
-  end
-  payload_extra.model = M.config.model
-  payload_extra.messages = vim.list_extend({ { role = "system", content = system } }, vim.list_extend(history_msgs, {
-    { role = "user", content = user },
-  }))
-  payload_extra.temperature = 0.1
-  payload_extra.max_tokens = M.config.max_tokens
-
-  return vim.json.encode(payload_extra)
+  return real
 end
 
-local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
-  if not M.config.api_key then
-    vim.notify("OPENAI_API_KEY or OPENROUTER_API_KEY not set", vim.log.levels.ERROR)
-    return
-  end
+-- Tool the model can call to read files inside the project directory.
+local READ_TOOL = {
+  type = "function",
+  ["function"] = {
+    name = "read_file",
+    description =
+      "Read a file inside the project directory. Use it to inspect related files before editing or answering. "
+      .. "The path is relative to the project root (e.g. src/main.rs).",
+    parameters = {
+      type = "object",
+      properties = {
+        path = {
+          type = "string",
+          description = "Path relative to the project root, or absolute (only files inside the project work).",
+        },
+      },
+      required = { "path" },
+    },
+  },
+}
 
-  -- Temporarily switch to the target buffer so history() reads the right one
-  local old_buf = vim.api.nvim_get_current_buf()
-  vim.api.nvim_set_current_buf(bufnr)
-  local ok_payload, payload = pcall(build_payload, instruction, code, filetype, diff, mode)
-  vim.api.nvim_set_current_buf(old_buf)
-  if not ok_payload then
-    cb(nil, "failed to build payload: " .. tostring(payload))
-    return
+-- Read a file, but only if the resolved (symlinks, `..`) path stays inside
+-- the project dir. Trust boundary: never let the model read outside cwd.
+local function read_project_file(path)
+  if type(path) ~= "string" or path == "" then
+    return "Error: 'path' must be a non-empty string"
   end
+  local cwd = vim.fn.getcwd()
+  local cwd_real = vim.fn.resolve(cwd)
+  local full = path:sub(1, 1) == "/" and path or cwd .. "/" .. path
+  local real = vim.fn.resolve(full)
+  local prefix = cwd_real == "/" and "/" or cwd_real .. "/"
+  if real:sub(1, #prefix) ~= prefix then
+    return "Error: path escapes the project directory: " .. real
+  end
+  if vim.fn.filereadable(real) == 0 then
+    return "Error: file not found: " .. path
+  end
+  local size = vim.fn.getfsize(real)
+  if size > M.config.read_tool_max_bytes then
+    return string.format("Error: file too large (%d bytes, limit %d)", size, M.config.read_tool_max_bytes)
+  end
+  local f = io.open(real, "rb")
+  if not f then
+    return "Error: cannot open file: " .. path
+  end
+  local content = f:read("*a")
+  f:close()
+  return content
+end
 
+-- Runs one tool call; always returns a string the model can read.
+local function execute_tool(tc)
+  if not (tc and tc["function"] and tc["function"].name == "read_file") then
+    return "Error: unsupported tool call"
+  end
+  local ok, args = pcall(vim.json.decode, tc["function"].arguments or "{}")
+  if not ok or type(args) ~= "table" then
+    return "Error: invalid tool arguments"
+  end
+  return read_project_file(args.path)
+end
+
+local function send_payload(payload, cb)
   local tmp = vim.fn.tempname()
   local f = assert(io.open(tmp, "w"))
-  f:write(payload)
+  f:write(vim.json.encode(payload))
   f:close()
 
   local cmd = {
@@ -204,20 +215,127 @@ local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
       cb(nil, "API error: " .. (data.error.message or data.error))
       return
     end
-    local content = data.choices and data.choices[1] and data.choices[1].message.content
-    if not content then
-      cb(nil, "empty response")
-      return
-    end
-
-    -- Abort if the model ran out of tokens; the file would be truncated.
-    local finish = data.choices[1].finish_reason
-    if finish == "length" then
-      cb(nil, "response truncated (max_tokens reached). File NOT modified. Split the request into smaller steps or raise max_tokens.")
-      return
-    end
-    cb(content)
+    cb(data)
   end)
+end
+local function build_payload(instruction, code, filetype, diff, mode, bufnr)
+  mode = mode or "edit"
+  local rel = buffer_relpath(bufnr)
+  local where_hint = "The current working file is " .. (rel and ("'" .. rel .. "'") or "(an unsaved new buffer)") .. ". "
+  if M.config.read_tool then
+    where_hint =
+      where_hint .. "You can read files in the project with the read_file tool (paths relative to the project root). "
+  end
+  local system
+  if mode == "ask" then
+    system =
+      "You are an expert programmer. The user asks a question as a comment. "
+      .. "Answer the question concisely and accurately. "
+      .. "If the question is about the current file, reference it. "
+      .. "Reply with ONLY the answer text, no markdown fences, no preamble. "
+      .. "Short answers preferred (under 10 lines unless asked for detail). "
+      .. where_hint
+  else
+    system =
+      "You are an expert code editor working interactively on one file. "
+      .. "The user gives an instruction as a comment. "
+      .. "You already had previous edit conversations on this file (given in history). "
+      .. "Apply the new instruction by editing the file. "
+      .. "Reply with ONLY the complete edited file content, no explanations, no markdown fences. "
+      .. "Remove the instruction comment line itself after applying the edit. "
+      .. "Preserve everything else exactly as-is (whitespace, comments, formatting). "
+      .. where_hint
+  end
+
+  local history_msgs = {}
+  for _, m in ipairs(M.history()) do
+    table.insert(history_msgs, { role = m.role, content = m.content })
+  end
+
+  -- Send the diff when available, otherwise the full file.
+  local context
+  if diff then
+    context = ("File type: %s\n\n(History of previous edits follows.)\n\nCurrent uncommitted changes (git diff):\n```diff\n%s\n```\n\nFull file for reference (only if you need to see unchanged code):\n```\n%s\n```")
+      :format(filetype, diff, code)
+  else
+    context = ("File type: %s\n\n(History of previous edits on this file follows.)\n\nInstruction: %s\n\nCurrent file:\n```\n%s\n```")
+      :format(filetype, instruction, code)
+  end
+
+  local user = ("%s: %s\n\n%s"):format(mode == "ask" and "Question" or "Instruction", instruction, context)
+
+  -- OpenRouter: fastest provider wins. Skipped for other providers.
+  local payload = {
+    model = M.config.model,
+    messages = vim.list_extend({ { role = "system", content = system } }, vim.list_extend(history_msgs, {
+      { role = "user", content = user },
+    })),
+    temperature = 0.1,
+    max_tokens = M.config.max_tokens,
+  }
+  if M.config.url:find("openrouter") then
+    payload.provider = { sort = "latency" }
+  end
+  if M.config.read_tool then
+    payload.tools = { READ_TOOL }
+  end
+  return payload
+end
+
+local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
+  if not M.config.api_key then
+    vim.notify("OPENAI_API_KEY or OPENROUTER_API_KEY not set", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Temporarily switch to the target buffer so history() reads the right one
+  local old_buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_set_current_buf(bufnr)
+  local ok_payload, payload = pcall(build_payload, instruction, code, filetype, diff, mode, bufnr)
+  vim.api.nvim_set_current_buf(old_buf)
+  if not ok_payload then
+    cb(nil, "failed to build payload: " .. tostring(payload))
+    return
+  end
+
+  -- Loop: resolve model tool calls, then resend, until it answers.
+  -- ponytail: cap at 3 tool rounds; local file reads are fast.
+  local rounds = 0
+  local function send()
+    send_payload(payload, function(data, err)
+      if err then
+        cb(nil, err)
+        return
+      end
+      local choice = data.choices and data.choices[1]
+      local msg = choice and choice.message
+      if choice and choice.finish_reason == "length" then
+        cb(nil, "response truncated (max_tokens reached). File NOT modified. Split the request into smaller steps or raise max_tokens.")
+        return
+      end
+      if msg and msg.tool_calls and #msg.tool_calls > 0 and M.config.read_tool then
+        rounds = rounds + 1
+        if rounds >= 4 then
+          cb(nil, "too many tool rounds, giving up")
+          return
+        end
+        table.insert(payload.messages, { role = "assistant", content = msg.content or "", tool_calls = msg.tool_calls })
+        for _, tc in ipairs(msg.tool_calls) do
+          table.insert(payload.messages, { role = "tool", tool_call_id = tc.id, content = execute_tool(tc) })
+        end
+        send()
+        return
+      end
+      -- some reasoning models return the answer in reasoning_content
+      local content = msg and (msg.content or msg.reasoning_content)
+      if not content then
+        cb(nil, "empty response")
+        return
+      end
+      cb(content)
+    end)
+  end
+  send()
 end
 
 -- ================= apply =================
@@ -374,5 +492,8 @@ function M.setup(opts)
     end,
   })
 end
+
+-- Tool-call test hook (internal)
+M._read_file = read_project_file
 
 return M

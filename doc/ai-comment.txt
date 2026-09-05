@@ -58,6 +58,10 @@ url               Any OpenAI-compatible endpoint.
 api_key           API key. Read from OPENAI_API_KEY, then OPENROUTER_API_KEY.
 max_tokens        Output token limit. (default: 16384)
 history_size      Conversation turns remembered per buffer. (default: 10)
+read_tool         Let the AI read files inside the project dir via a read_file
+                  tool. Rejects paths that escape the current directory.
+                  (default: true)
+read_tool_max_bytes  Per-file size limit for read_tool. (default: 100000)
 edit_marker       Comment ending that triggers an AI edit. (default: ai!)
 ask_marker        Comment ending that asks the AI. (default: ai?)
 

@@ -90,6 +90,8 @@ require("ai-comment").setup({
   api_key = vim.env.OPENAI_API_KEY or vim.env.OPENROUTER_API_KEY,
   max_tokens = 16384, -- output limit
   history_size = 10,  -- conversation turns remembered per buffer
+  read_tool = true,   -- the AI can read files inside the project dir (cwd)
+  read_tool_max_bytes = 100000, -- per-file size limit for read_tool
   edit_marker = "ai!", -- comment ending triggers an AI edit
   ask_marker = "ai?",  -- comment ending asks the AI
 })
@@ -109,6 +111,11 @@ model and endpoint without touching the config file.
 - **Latency.** When the endpoint is OpenRouter, `provider.sort = "latency"` is sent so it routes to the fastest provider for the model.
 - **Truncation guard.** If the model hits `max_tokens`, the response is discarded instead of clobbering your file with a partial copy.
 - **Short-response guard.** A response that halves your file is probably a mistake. It's rejected.
+- **Project file tool.** The AI knows the current file's path and can read
+  other files inside the project directory via a `read_file` tool (function
+  calling) before editing or answering. Paths that resolve outside the
+  current directory (including `..` and symlinks) are rejected. Disable with
+  `read_tool = false`; per-file reads are capped at `read_tool_max_bytes`.
 - `u` undoes everything.
 
 ## Commands

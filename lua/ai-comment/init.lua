@@ -19,11 +19,13 @@ M.config = {
 	read_tool = true, -- let the AI read files inside the project dir (cwd)
 	read_tool_max_bytes = 100000, -- per-file size limit for read_tool
 	read_tool_budget = 300000, -- max total bytes read per request
+	max_reads = 6, -- max total read_file/list_files calls per request
 	max_tool_rounds = 50, -- max tool-call rounds per request
 }
 
 -- Per-request read budget (bytes consumed by read_file this request).
 local read_budget_used = 0
+local reads_used = 0
 
 -- Per-buffer conversation history: { [bufnr] = { { role, content }, ... } }
 local history = {}
@@ -257,6 +259,16 @@ local function execute_tool(tc)
 		return "Error: invalid tool arguments"
 	end
 	local name = tc["function"].name
+	if name == "read_file" or name == "list_files" then
+		if reads_used >= M.config.max_reads then
+			return string.format(
+				"Error: read limit reached (%d/%d calls). Do not call read/list again; finish with what you have.",
+				reads_used,
+				M.config.max_reads
+			)
+		end
+		reads_used = reads_used + 1
+	end
 	if name == "read_file" then
 		local res = read_project_file(args.path)
 		notify(string.format("read_file: %s (%d bytes)", tostring(args.path), #tostring(res)))
@@ -348,9 +360,9 @@ local function build_payload(instruction, code, filetype, diff, mode, bufnr)
 
 	if M.config.read_tool then
 		system = system
-			.. "\n\nRULES for using read_file/list_files: "
+			.. ("\n\nHARD LIMIT: you have at most %d total read_file/list_files calls for this entire task. "):format(M.config.max_reads)
 			.. "Read as FEW files as possible: only what is strictly needed for the instruction. "
-			.. "The task almost always needs ZERO or ONE read. Prefer the definitions you already see. "
+			.. "The task almost always needs ZERO or ONE read. "
 			.. "If the instruction makes you implement, override, or use a type/function/trait imported or defined in another file"
 			.. " (you only see its import line, not its body), you MUST call read_file on that one definition before editing; "
 			.. "then STOP reading. Never read files just to explore, "
@@ -423,6 +435,7 @@ local function request_edit(instruction, code, filetype, bufnr, diff, mode, cb)
 	-- ponytail: cap at 3 tool rounds; local file reads are fast.
 	local rounds = 0
 	read_budget_used = 0 -- reset per-request read budget
+	reads_used = 0 -- reset per-request read count
 	local function send()
 		send_payload(payload, function(data, err)
 			if err then
@@ -639,5 +652,8 @@ end
 -- Tool-call test hooks (internal)
 M._read_file = read_project_file
 M._list_files = list_project_files
+M._reads_reset = function() reads_used = 0 end
+M._execute_tool = execute_tool
+M._set_max_reads = function(n) M.config.max_reads = n end
 
 return M

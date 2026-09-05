@@ -194,7 +194,7 @@ local function read_project_file(path)
     return "Error: " .. perr
   end
   if vim.fn.filereadable(real) == 0 then
-    return "Error: file not found: " .. path
+    return "Error: file not found: " .. path .. ". Use list_files to find the correct path."
   end
   local size = vim.fn.getfsize(real)
   if size > M.config.read_tool_max_bytes then
@@ -202,7 +202,7 @@ local function read_project_file(path)
   end
   local f = io.open(real, "rb")
   if not f then
-    return "Error: cannot open file: " .. path
+    return "Error: cannot open file: " .. path .. " (permissions?)"
   end
   local content = f:read("*a")
   f:close()
@@ -216,7 +216,7 @@ local function list_project_files(path)
     return "Error: " .. perr
   end
   if vim.fn.isdirectory(real) == 0 then
-    return "Error: not a directory: " .. path
+    return "Error: not a directory: " .. path .. ". Use list_files with a directory, or read_file for a file."
   end
   local entries = vim.fn.readdir(real)
   if #entries > 200 then

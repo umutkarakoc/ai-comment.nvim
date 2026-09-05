@@ -62,6 +62,7 @@ read_tool         Let the AI read files inside the project dir via a read_file
                   tool. Rejects paths that escape the current directory.
                   (default: true)
 read_tool_max_bytes  Per-file size limit for read_tool. (default: 100000)
+read_tool_budget     Max total bytes read per request. (default: 300000)
 edit_marker       Comment ending that triggers an AI edit. (default: ai!)
 ask_marker        Comment ending that asks the AI. (default: ai?)
 

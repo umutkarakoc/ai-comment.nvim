@@ -96,6 +96,7 @@ require("ai-comment").setup({
   history_size = 10,  -- conversation turns remembered per buffer
   read_tool = true,   -- the AI can read files inside the project dir (cwd)
   read_tool_max_bytes = 100000, -- per-file size limit for read_tool
+  read_tool_budget = 300000,  -- max total bytes read per request
   edit_marker = "ai!", -- comment ending triggers an AI edit
   ask_marker = "ai?",  -- comment ending asks the AI
 })
@@ -119,7 +120,8 @@ model and endpoint without touching the config file.
   other files inside the project directory via a `read_file` tool (function
   calling) before editing or answering. Paths that resolve outside the
   current directory (including `..` and symlinks) are rejected. Disable with
-  `read_tool = false`; per-file reads are capped at `read_tool_max_bytes`.
+  `read_tool = false`; per-file reads are capped at `read_tool_max_bytes`
+  and the whole request reads at `read_tool_budget`.
 - `u` undoes everything.
 
 ## Commands

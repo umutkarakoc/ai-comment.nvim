@@ -1,0 +1,7 @@
+ai-comment	ai-comment.txt	/*ai-comment*
+ai-comment-behaviour	ai-comment.txt	/*ai-comment-behaviour*
+ai-comment-commands	ai-comment.txt	/*ai-comment-commands*
+ai-comment-install	ai-comment.txt	/*ai-comment-install*
+ai-comment-options	ai-comment.txt	/*ai-comment-options*
+ai-comment-usage	ai-comment.txt	/*ai-comment-usage*
+ai-comment.nvim	ai-comment.txt	/*ai-comment.nvim*

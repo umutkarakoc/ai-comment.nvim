@@ -18,7 +18,7 @@ M.config = {
   history_size = 10, -- conversation turns kept per buffer
   read_tool = true, -- let the AI read files inside the project dir (cwd)
   read_tool_max_bytes = 100000, -- per-file size limit for read_tool
-  max_tool_rounds = 20, -- max tool-call rounds per request
+  max_tool_rounds = 50, -- max tool-call rounds per request
 }
 
 -- Per-buffer conversation history: { [bufnr] = { { role, content }, ... } }

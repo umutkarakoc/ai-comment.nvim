@@ -201,21 +201,25 @@ local function send_payload(payload, cb)
     "--data-binary", "@" .. tmp,
   }
   vim.system(cmd, { text = true }, function(res)
-    os.remove(tmp)
-    if res.code ~= 0 then
-      cb(nil, "curl error: " .. (res.stderr or "exit " .. tostring(res.code)))
-      return
-    end
-    local ok, data = pcall(vim.json.decode, res.stdout)
-    if not ok then
-      cb(nil, "JSON parse error: " .. res.stdout:sub(1, 300))
-      return
-    end
-    if data.error then
-      cb(nil, "API error: " .. (data.error.message or data.error))
-      return
-    end
-    cb(data)
+    -- vim.system callbacks run in a fast-event context where vim.fn.* is
+    -- forbidden; schedule to the main loop before touching any of it.
+    vim.schedule(function()
+      os.remove(tmp)
+      if res.code ~= 0 then
+        cb(nil, "curl error: " .. (res.stderr or "exit " .. tostring(res.code)))
+        return
+      end
+      local ok, data = pcall(vim.json.decode, res.stdout)
+      if not ok then
+        cb(nil, "JSON parse error: " .. res.stdout:sub(1, 300))
+        return
+      end
+      if data.error then
+        cb(nil, "API error: " .. (data.error.message or data.error))
+        return
+      end
+      cb(data)
+    end)
   end)
 end
 local function build_payload(instruction, code, filetype, diff, mode, bufnr)

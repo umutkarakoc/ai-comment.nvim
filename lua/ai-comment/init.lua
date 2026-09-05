@@ -143,19 +143,55 @@ local READ_TOOL = {
   },
 }
 
--- Read a file, but only if the resolved (symlinks, `..`) path stays inside
--- the project dir. Trust boundary: never let the model read outside cwd.
-local function read_project_file(path)
-  if type(path) ~= "string" or path == "" then
-    return "Error: 'path' must be a non-empty string"
+-- Tool the model can call to list a directory (like `ls`).
+local LIST_TOOL = {
+  type = "function",
+  ["function"] = {
+    name = "list_files",
+    description =
+      "List files and subdirectories inside the project directory. Useful to explore the codebase "
+      .. "before choosing what to read. The path is a directory relative to the project root (e.g. src).",
+    parameters = {
+      type = "object",
+      properties = {
+        path = {
+          type = "string",
+          description = "Directory path relative to the project root; empty string or '.' lists the project root.",
+        },
+      },
+      required = { "path" },
+    },
+  },
+}
+
+TOOLS = { READ_TOOL, LIST_TOOL }
+
+-- Resolve path inside project; returns real path or nil + error string.
+-- Shared guard for read/list: never let the model escape cwd.
+local function resolve_in_project(path)
+  if type(path) ~= "string" then
+    return nil, "path must be a string"
   end
   local cwd = vim.fn.getcwd()
   local cwd_real = vim.fn.resolve(cwd)
-  local full = path:sub(1, 1) == "/" and path or cwd .. "/" .. path
+  local full = path == "" and cwd or (path:sub(1, 1) == "/" and path or cwd .. "/" .. path)
   local real = vim.fn.resolve(full)
   local prefix = cwd_real == "/" and "/" or cwd_real .. "/"
-  if real:sub(1, #prefix) ~= prefix then
-    return "Error: path escapes the project directory: " .. real
+  if real ~= cwd_real and real:sub(1, #prefix) ~= prefix then
+    return nil, "path escapes the project directory: " .. real
+  end
+  return real
+end
+
+-- Read a file, but only if the resolved (symlinks, `..`) path stays inside
+-- the project dir. Trust boundary: never let the model read outside cwd.
+local function read_project_file(path)
+  if path == "" then
+    return "Error: 'path' must be a non-empty string"
+  end
+  local real, perr = resolve_in_project(path)
+  if not real then
+    return "Error: " .. perr
   end
   if vim.fn.filereadable(real) == 0 then
     return "Error: file not found: " .. path
@@ -173,18 +209,45 @@ local function read_project_file(path)
   return content
 end
 
+-- List a directory inside the project (like `ls`). Cap the number of entries.
+local function list_project_files(path)
+  local real, perr = resolve_in_project(path == "" and "." or path)
+  if not real then
+    return "Error: " .. perr
+  end
+  if vim.fn.isdirectory(real) == 0 then
+    return "Error: not a directory: " .. path
+  end
+  local entries = vim.fn.readdir(real)
+  if #entries > 200 then
+    entries = vim.list_slice(entries, 1, 200)
+    entries[#entries + 1] = "... (truncated, " .. "too many entries)"
+  end
+  table.sort(entries)
+  return table.concat(entries, "\n")
+end
+
 -- Runs one tool call; always returns a string the model can read.
 local function execute_tool(tc)
-  if not (tc and tc["function"] and tc["function"].name == "read_file") then
+  if not (tc and tc["function"] and tc["function"].name) then
     return "Error: unsupported tool call"
   end
   local ok, args = pcall(vim.json.decode, tc["function"].arguments or "{}")
   if not ok or type(args) ~= "table" then
     return "Error: invalid tool arguments"
   end
-  local res = read_project_file(args.path)
-  notify(string.format("read_file: %s (%d bytes)", tostring(args.path), #tostring(res)))
-  return res
+  local name = tc["function"].name
+  if name == "read_file" then
+    local res = read_project_file(args.path)
+    notify(string.format("read_file: %s (%d bytes)", tostring(args.path), #tostring(res)))
+    return res
+  elseif name == "list_files" then
+    local res = list_project_files(args.path)
+    local n = #vim.split(res, "\n", { plain = true })
+    notify(string.format("list_files: %s (%d entries)", tostring(args.path), n))
+    return res
+  end
+  return "Error: unsupported tool call"
 end
 
 local function send_payload(payload, cb)
@@ -289,7 +352,7 @@ local function build_payload(instruction, code, filetype, diff, mode, bufnr)
     payload.provider = { sort = "latency" }
   end
   if M.config.read_tool then
-    payload.tools = { READ_TOOL }
+    payload.tools = TOOLS
   end
   return payload
 end
@@ -505,7 +568,8 @@ function M.setup(opts)
   })
 end
 
--- Tool-call test hook (internal)
+-- Tool-call test hooks (internal)
 M._read_file = read_project_file
+M._list_files = list_project_files
 
 return M

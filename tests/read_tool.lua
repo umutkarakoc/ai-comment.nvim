@@ -12,10 +12,23 @@ local function expect_err(r)
   assert(type(r) == "string" and r:find("^Error:"), "guard atladi: " .. tostring(r))
 end
 
+-- read_file guards
 assert(M._read_file("a.txt") == "hello", "icine dosya okunamadi")
 assert(M._read_file("./a.txt") == "hello", "./ okunamadi")
-expect_err(M._read_file("../secret.txt"))  -- .. kacisi
-expect_err(M._read_file(base .. "/secret.txt")) -- mutlak disari
-expect_err(M._read_file("/etc/passwd"))     -- sistem dosyasi
-expect_err(M._read_file("yok.txt"))         -- yok dosya
-print("read_tool guard test: GECTI")
+expect_err(M._read_file("../secret.txt"))
+expect_err(M._read_file(base .. "/secret.txt"))
+expect_err(M._read_file("/etc/passwd"))
+expect_err(M._read_file("yok.txt"))
+
+-- list_files
+vim.fn.mkdir(base .. "/proj/src", "p")
+vim.fn.writefile({ "x" }, base .. "/proj/src/main.rs")
+local lr = M._list_files("src")
+assert(type(lr) == "string" and lr:find("main.rs"), "list src calismadi: " .. tostring(lr))
+local lr2 = M._list_files(".")
+assert(type(lr2) == "string" and lr2:find("a.txt"), "list . calismadi: " .. tostring(lr2))
+expect_err(M._list_files(".."))
+expect_err(M._list_files("/etc"))
+expect_err(M._list_files("yokdir"))
+
+print("TUM GUARD TESTLERI GECTI")

@@ -32,13 +32,9 @@ end
 
 -- ================= helpers =================
 
--- Notify. persist=true keeps the message until replaced/dismissed.
-local function notify(msg, level, persist)
-  if persist then
-    vim.notify(msg, level or vim.log.levels.INFO, { timeout = 0, replace = true })
-  else
-    vim.notify(msg, level or vim.log.levels.INFO, { replace = true })
-  end
+-- Notify. Always auto-dismisses (no persistent toasts).
+local function notify(msg, level)
+  vim.notify(msg, level or vim.log.levels.INFO)
 end
 
 -- Sign shown in the sign column while a request is in flight
@@ -186,7 +182,9 @@ local function execute_tool(tc)
   if not ok or type(args) ~= "table" then
     return "Error: invalid tool arguments"
   end
-  return read_project_file(args.path)
+  local res = read_project_file(args.path)
+  notify(string.format("read_file: %s (%d bytes)", tostring(args.path), #tostring(res)))
+  return res
 end
 
 local function send_payload(payload, cb)
@@ -448,13 +446,13 @@ function M.run()
   end
 
   local ft = vim.bo.filetype ~= "" and vim.bo.filetype or vim.fn.expand("%:e")
-  notify(marker .. " working: " .. instruction, vim.log.levels.INFO, true)
+  notify(marker .. " working: " .. instruction)
   sign_show()
   local bufnr = vim.api.nvim_get_current_buf()
 
   local diff = git_diff_for(bufnr)
   if diff then
-    notify(marker .. " diff context found (" .. #diff .. " bytes)", vim.log.levels.INFO)
+    notify(marker .. " diff context found (" .. #diff .. " bytes)")
   end
 
   local history_msgs = M.history(bufnr)

@@ -348,11 +348,15 @@ local function build_payload(instruction, code, filetype, diff, mode, bufnr)
 
 	if M.config.read_tool then
 		system = system
-			.. "\n\nRULES for using read_file: "
+			.. "\n\nRULES for using read_file/list_files: "
+			.. "Read as FEW files as possible: only what is strictly needed for the instruction. "
+			.. "The task almost always needs ZERO or ONE read. Prefer the definitions you already see. "
 			.. "If the instruction makes you implement, override, or use a type/function/trait imported or defined in another file"
-			.. " (you only see its import line, not its body), you MUST call read_file to read that definition before editing. "
+			.. " (you only see its import line, not its body), you MUST call read_file on that one definition before editing; "
+			.. "then STOP reading. Never read files just to explore, "
+			.. "never read siblings, tests, or related modules unless the instruction explicitly requires them. "
 			.. "Never guess the shape of an API you have not read. "
-			.. "Also read other files if doing so is needed to understand the requested change."
+			.. "Repeated tool calls that add little information are a failure: after 1-2 reads, produce the edit or answer."
 	end
 
 	local history_msgs = {}

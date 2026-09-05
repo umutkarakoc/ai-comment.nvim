@@ -247,6 +247,15 @@ local function build_payload(instruction, code, filetype, diff, mode, bufnr)
       .. where_hint
   end
 
+  if M.config.read_tool then
+    system = system
+      .. "\n\nRULES for using read_file: "
+      .. "If the instruction makes you implement, override, or use a type/function/trait imported or defined in another file"
+      .. " (you only see its import line, not its body), you MUST call read_file to read that definition before editing. "
+      .. "Never guess the shape of an API you have not read. "
+      .. "Also read other files if doing so is needed to understand the requested change."
+  end
+
   local history_msgs = {}
   for _, m in ipairs(M.history()) do
     table.insert(history_msgs, { role = m.role, content = m.content })

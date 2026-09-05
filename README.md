@@ -2,6 +2,7 @@
 
 Edit your code by writing comments.
 
+[screen-capture (4).webm](https://github.com/user-attachments/assets/06f028ca-52e1-476f-b135-462533275cfa)
 [demo.webm](https://github.com/user-attachments/assets/03d72d08-06cb-46fb-be38-b6c7c0836b2d)
 
 ```
@@ -10,12 +11,15 @@ sum the array with a for loop ai!
 
 Press Esc. Done.
 
+
 ## What it does
 
 Two markers, two behaviours:
 
 - A comment ending with `ai!` tells the AI to edit the file.
 - A comment ending with `ai?` asks a question, and the answer is inserted right below as a comment.
+- Only has two tool to read your files: List directory and Read File
+- And only has one tool to edit your current buffer with git diff format
 
 It uses whatever model you pick on any OpenAI-compatible endpoint. There's no
 wrapper around a specific vendor SDK — it just calls the chat completions API
